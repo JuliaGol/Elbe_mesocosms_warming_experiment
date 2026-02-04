@@ -1,0 +1,640 @@
+---
+title: "mesocosm_warming_all"
+author: "Julia Golebiowska"
+date: "2025-12-22"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 1. Introduction
+In this report, I am presenting results of metabarcoding using 18S rRNA marker gene (region V9) from mesocosm warming experiment .
+The marker was amplified from both 1) DNA and 2) RNA fractions enabling to obtain 1) taxonomic composition 2) identify active fraction (actively transcribing) of community.
+The experiment design required field sampling of 10 t.
+of water that was distributed to the tanks.
+The field sampling for metabarcoding was done parallelly.
+Tanks were exposed for 3-4 weeks to three different temperature conditions - 21 (delta 0), 23 (+2) and 25 (+4)).
+The water sampling was done after 2 days acclimatization and then after 3 weeks.
+The sediment samples where taken 2 days later on the termination day of the experiment.
+Due to drastic die off of the planktonic fraction after 10 days mostly samples from the first sampling were sequenced first, but the samples from second sampling ware sequenced in the second run with some common samples for evaluating batch efect.  
+Each water sample was filtered twice - through 5 um filter to obtain the particle-associated (PA) fraction enriched in protists and through 0.22 um filter to obtain free-living (FL) - mainly prokaryotic fraction.
+The RNA and DNA fractions from the first round were used for 18S marker gene/18 rRNA sequencing to understand the eukaryotic community shift and active fraction of the community due to different conditions.
+The same was applied for DNA and RNA sediment samples and corresponding DNA water samples from second round of sampling were sequenced do understand if stated conditions had an effect on vertical migration of microbes into sediment.
+Data preprocessing and partial analysis were done in qiime2 and continued in the following R script.
+
+
+```{r}
+library("phyloseq")
+library("ggplot2")
+library("vegan")
+library("dplyr")
+library("tidyr")
+devtools::install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+library(pairwiseAdonis)
+setwd("/YOUR/PATH")
+#no samples names in header
+#manually removed # 
+otu <- read.table("feature-table-rare.tsv", header=T,
+                        check.names=F, sep="\t", row.names = 1)
+samples <- read.table("metadata2nd.txt", header=T,
+                     check.names=F, sep="\t", row.names = 1)
+#for clear legend and easier coding
+samples$conditions <- samples$"`temperature elevation`"
+samples$conditions[which(samples$"`temperature elevation`"=="-")] <- "field"
+samples$conditions[which(samples$"`temperature elevation`"=="0")] <- "tank delta 0"
+samples$conditions[which(samples$"`temperature elevation`"=="2")] <- "tank delta 2"
+samples$conditions[which(samples$"`temperature elevation`"=="4")] <- "tank delta 4"
+weighted_unifrac_distance_matrix <- read.table("diversity-core-metrics-phylogenetic/weighted_unifrac_distance-matrix.tsv", header=T,
+                                               check.names=F, sep="\t", row.names = 1)
+weighted_unifrac_dist <- as.dist(weighted_unifrac_distance_matrix) 
+taxa <- row.names(otu)
+```
+# 2. Visualise beta diversity
+## 2.1 All samples
+```{r}
+samples_names <- row.names(samples)
+sum_vec <- as.vector(apply(otu, 1, sum))
+otu.nonzero <- otu[which(sum_vec!=0),]
+otu.nonzero <- as.matrix(otu.nonzero)
+taxa.nonzero <- taxa[which(sum_vec!=0)]
+taxa.nonzero <- as.matrix(taxa.nonzero)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+
+weighted_unifrac_dist <- as.dist(weighted_unifrac_distance_matrix[row, col]) 
+
+row.names(taxa.nonzero) <- taxa.nonzero[,1]
+
+ps_all <- phyloseq(otu_table(otu.nonzero, taxa_are_rows=TRUE), 
+                   sample_data(samples), 
+                   taxa_names(taxa.nonzero))
+palette <- c( 
+  "#4a7c2e", 
+  "#365ea4", 
+  "#d6a01b", 
+  "#c15208" )
+#try unifrac;
+ord.pcoa.weighted_unifrac_dist <- ordinate(ps_all, method="PCoA", distance=weighted_unifrac_dist, na.rm = T)
+
+p<-plot_ordination(ps_all, ord.pcoa.weighted_unifrac_dist, color="conditions")
+p<-plot_ordination(ps_all, ord.pcoa.weighted_unifrac_dist, color="fraction")
+p<-plot_ordination(ps_all, ord.pcoa.weighted_unifrac_dist, color="sequencing")
+#divide by sampling turn 
+p$data$week <- p$data$sampling_date
+p$data$week[which(p$data$week=="21/08/2024")] <- "3rd week"
+p$data$week[which(p$data$week=="23/08/2024")] <- "3rd week"
+p$data$fraction[which(p$data$fraction=="")] <- "sediment"
+p$data$week[which(p$data$week!="3rd week")] <- "1st week"
+p$data$fraction[which(p$data$fraction=="FL")] <- "<5 µm"
+p$data$fraction[which(p$data$fraction=="PA")] <- ">5 µm"
+p$data$all <- paste(p$data$week, p$data$fraction) 
+#check sequencing effect - no batch effect
+ggplot(data=p$data, aes(x=Axis.1, y=Axis.2, label=rownames(p$data), color= sequencing, shape = fraction )) + geom_point(size= 3) + geom_text(hjust=0, vjust=0) + labs(x="PC1", y= "PC2") + theme_minimal()
+#visualise fractions,  conditions and week of sampling
+tiff("plot_all_mesocosm.tiff", unit="cm", width = 30, height=20, res=300)
+p_all<- ggplot(data=p$data, aes(x=Axis.1, y=Axis.2, color= conditions, shape = all)) + geom_point(size= 3, stroke=2, fill="black")+ labs(x="PC1", y= "PC2")  + scale_color_manual(values=palette) + scale_shape_manual(values=c(0, 15, 1, 16, 13), name="sample") + facet_grid(vars(DNA_or_RNA)) + theme_minimal(base_size = 20)
+dev.off()
+pdf("plot_all_mesocosm.pdf", width = 15, height=10)
+p_all
+dev.off()
+png("plot_all_mesocosm.png", unit="px", width = 600, height=400)
+p_all
+dev.off()
+jpeg("plot_all_mesocosm.jpeg", unit="px", width = 1000, height=800)
+p_all
+dev.off()
+p_all
+p$data$all <- paste(p$data$week, p$data$fraction,  p$data$DNA_or_RNA) 
+pdf("plot_all_mesocosm_the_same_coordinates.pdf", width = 15, height=10)
+p_cor <- ggplot(data=p$data, aes(x=Axis.1, y=Axis.2, color= conditions, shape = all)) + geom_point(size= 3, stroke=2, fill="black")+ labs(x="PC1", y= "PC2")  + scale_color_manual(values=palette) + scale_shape_manual(values=c(0, 15, 1, 16, 13, 22, 21, 2), name="sample")  + theme_minimal(base_size = 20)
+dev.off()
+p_cor
+```
+
+## 2.2 DNA samples
+
+```{r}
+#DNA
+samples_DNA <- samples[which(samples$DNA_or_RNA == "DNA"),]
+samples_DNA_names <- row.names(samples_DNA)
+otu_DNA <- otu[, which(colnames(otu) %in% samples_DNA_names)]
+sum_vec <- as.vector(apply(otu_DNA, 1, sum))
+otu.nonzero <- otu[which(sum_vec!=0),]
+otu.nonzero <- as.matrix(otu.nonzero)
+taxa.nonzero <- taxa[which(sum_vec!=0)]
+taxa.nonzero <- as.matrix(taxa.nonzero)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_DNA_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_DNA_names)
+
+weighted_unifrac_dist <- as.dist(weighted_unifrac_distance_matrix[row, col]) 
+
+row.names(taxa.nonzero) <- taxa.nonzero[,1]
+
+ps_DNA <- phyloseq(otu_table(otu.nonzero, taxa_are_rows=TRUE), 
+                   sample_data(samples_DNA), 
+                   taxa_names(taxa.nonzero))
+palette <- c( 
+  "#4a7c2e", 
+  "#365ea4", 
+  "#d6a01b", 
+  "#c15208" )
+#try unifrac;
+ord.pcoa.weighted_unifrac_dist <- ordinate(ps_DNA, method="PCoA", distance=weighted_unifrac_dist, na.rm = T)
+
+p<-plot_ordination(ps_DNA, ord.pcoa.weighted_unifrac_dist, color="conditions")
+p<-plot_ordination(ps_DNA, ord.pcoa.weighted_unifrac_dist, color="fraction")
+p<-plot_ordination(ps_DNA, ord.pcoa.weighted_unifrac_dist, color="sequencing")
+#divide by sampling turn 
+p$data$week <- p$data$sampling_date
+p$data$week[which(p$data$week=="21/08/2024")] <- "3rd week"
+p$data$week[which(p$data$week=="23/08/2024")] <- "3rd week"
+p$data$fraction[which(p$data$fraction=="")] <- "sediment"
+p$data$fraction[which(p$data$fraction=="FL")] <- "<5 µm"
+p$data$fraction[which(p$data$fraction=="PA")] <- ">5 µm"
+p$data$week[which(p$data$week!="3rd week")] <- "1st week"
+p$data$all <- paste(p$data$week, p$data$fraction) 
+
+#visualise fractions,  conditions and week of sampling
+tiff("plot_DNA_mesocosm.tiff",unit="cm", width = 30, height=20, res=300)
+ggplot(data=p$data, aes(x=Axis.1, y=Axis.2, color= conditions, shape = all)) + geom_point(size= 3, stroke=2)+ labs(x="PC1", y= "PC2")  + scale_color_manual(values=palette) + scale_shape_manual(values=c(22, 15, 21, 16, 13))  + theme_minimal(base_size = 20)
+dev.off()
+ggplot(data=p$data, aes(x=Axis.1, y=Axis.2, color= conditions, shape = all)) + geom_point(size= 3, stroke=2)+ labs(x="PC1", y= "PC2")  + scale_color_manual(values=palette) + scale_shape_manual(values=c(22, 15, 21, 16, 13))  + theme_minimal(base_size = 20)
+```
+## 2.3 RNA samples
+
+```{r}
+#RNA
+samples_RNA <- samples[which(samples$DNA_or_RNA == "RNA"),]
+samples_RNA_names <- row.names(samples_RNA)
+otu_RNA <- otu[, which(colnames(otu) %in% samples_RNA_names)]
+sum_vec <- as.vector(apply(otu_RNA, 1, sum))
+otu.nonzero <- otu[which(sum_vec!=0),]
+otu.nonzero <- as.matrix(otu.nonzero)
+taxa.nonzero <- taxa[which(sum_vec!=0)]
+taxa.nonzero <- as.matrix(taxa.nonzero)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_RNA_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_RNA_names)
+
+weighted_unifrac_dist <- as.dist(weighted_unifrac_distance_matrix[row, col]) 
+
+row.names(taxa.nonzero) <- taxa.nonzero[,1]
+
+ps_RNA <- phyloseq(otu_table(otu.nonzero, taxa_are_rows=TRUE), 
+                   sample_data(samples_RNA), 
+                   taxa_names(taxa.nonzero))
+palette <- c( 
+  "#4a7c2e", 
+  "#365ea4", 
+  "#d6a01b", 
+  "#c15208" )
+#try unifrac;
+ord.pcoa.weighted_unifrac_dist <- ordinate(ps_RNA, method="PCoA", distance=weighted_unifrac_dist, na.rm = T)
+
+p<-plot_ordination(ps_RNA, ord.pcoa.weighted_unifrac_dist, color="conditions")
+p<-plot_ordination(ps_RNA, ord.pcoa.weighted_unifrac_dist, color="fraction")
+p<-plot_ordination(ps_RNA, ord.pcoa.weighted_unifrac_dist, color="sequencing")
+#divide by sampling turn 
+p$data$week <- p$data$sampling_date
+p$data$week[which(p$data$week=="21/08/2024")] <- "3rd week"
+p$data$week[which(p$data$week=="23/08/2024")] <- "3rd week"
+p$data$fraction[which(p$data$fraction=="")] <- "sediment"
+p$data$fraction[which(p$data$fraction=="FL")] <- "<5 µm"
+p$data$fraction[which(p$data$fraction=="PA")] <- ">5 µm"
+p$data$week[which(p$data$week!="3rd week")] <- "1st week"
+p$data$all <- paste(p$data$week, p$data$fraction) 
+
+#visualise fractions,  conditions and week of sampling
+tiff("plot_DNA_mesocosm.tiff",unit="cm", width = 30, height=20, res=300)
+ggplot(data=p$data, aes(x=Axis.1, y=Axis.2, color= conditions, shape = all)) + geom_point(size= 3, stroke=2)+ labs(x="PC1", y= "PC2")  + scale_color_manual(values=palette) + scale_shape_manual(values=c(22, 15, 21, 16, 13))  + theme_minimal(base_size = 20)
+dev.off()
+ggplot(data=p$data, aes(x=Axis.1, y=Axis.2, color= conditions, shape = all)) + geom_point(size= 3, stroke=2)+ labs(x="PC1", y= "PC2")  + scale_color_manual(values=palette) + scale_shape_manual(values=c(22, 15, 21, 16, 13))  + theme_minimal(base_size = 20)
+```
+# 3. Statistical test for grouping
+## 3.1 First sampling
+### 3.11 PA DNA
+
+```{r}
+#only PA
+samples_PA_DNA_1 <- samples[which(samples$fraction == "PA" & samples$sampling_date == "31/07/2024" & samples$DNA_or_RNA == "DNA" & samples$sequencing == "1"),]
+samples_names <- row.names(samples_PA_DNA_1)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_PA_DNA_1 <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#97D was removed as outlier
+#keep the same samples in the metadata
+samples_PA_DNA_1 <- samples_PA_DNA_1[which(rownames(samples_PA_DNA_1) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_PA_DNA_1)
+condition.ano_PA <- anosim(weighted_unifrac_dist_PA_DNA_1, conditions)
+summary(condition.ano_PA)
+PA.adonis2 <- adonis2(weighted_unifrac_dist_PA_DNA_1 ~ conditions, data=samples_PA_DNA_1)
+PA.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_PA_DNA_1, samples_PA_DNA_1$conditions)
+res
+```
+### 3.12 FL DNA
+```{r}
+#only FL
+samples_FL_DNA_1 <- samples[which(samples$fraction == "FL" & samples$sampling_date == "31/07/2024" & samples$DNA_or_RNA == "DNA" & samples$sequencing == "1"),]
+samples_names <- row.names(samples_FL_DNA_1)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_FL_DNA_1 <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_FL_DNA_1 <- samples_FL_DNA_1[which(rownames(samples_FL_DNA_1) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_FL_DNA_1)
+condition.ano_FL <- anosim(weighted_unifrac_dist_FL_DNA_1, conditions)
+summary(condition.ano_FL)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_FL_DNA_1 ~ conditions, data=samples_FL_DNA_1)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_FL_DNA_1, samples_FL_DNA_1$conditions)
+res
+```
+### 3.13 PA RNA
+```{r}
+#only PA
+samples_PA_RNA_1 <- samples[which(samples$fraction == "PA" & samples$sampling_date == "31/07/2024" & samples$DNA_or_RNA == "RNA" & samples$sequencing == "1"),]
+samples_names <- row.names(samples_PA_RNA_1)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_PA_RNA_1 <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_PA_RNA_1 <- samples_PA_RNA_1[which(rownames(samples_PA_RNA_1) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_PA_RNA_1)
+condition.ano_PA <- anosim(weighted_unifrac_dist_PA_RNA_1, conditions)
+summary(condition.ano_PA)
+PA.adonis2 <- adonis2(weighted_unifrac_dist_PA_RNA_1 ~ conditions, data=samples_PA_RNA_1)
+PA.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_PA_RNA_1, samples_PA_RNA_1$conditions)
+res
+```
+# 3.14 FL RNA
+```{r}
+#only FL
+samples_FL_RNA_1 <- samples[which(samples$fraction == "FL" & samples$sampling_date == "31/07/2024" & samples$DNA_or_RNA == "RNA" & samples$sequencing == "1"),]
+samples_names <- row.names(samples_FL_RNA_1)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_FL_RNA_1 <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the mtadata
+samples_FL_RNA_1 <- samples_FL_RNA_1[which(rownames(samples_FL_RNA_1) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_FL_RNA_1)
+condition.ano_FL <- anosim(weighted_unifrac_dist_FL_RNA_1, conditions)
+summary(condition.ano_FL)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_FL_RNA_1 ~ conditions, data=samples_FL_RNA_1)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_FL_RNA_1, samples_FL_RNA_1$conditions)
+res
+```
+# 3.2  DNA vs RNA - check shift in relative activity 
+# 3.21 PA
+```{r}
+#only PA
+samples_PA <- samples[which(samples$fraction == "PA" & samples$sequencing == "1" & (samples$sampling_date == "29/07/2024" | samples$sampling_date == "31/07/2024")),]
+samples_names <- row.names(samples_PA)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_PA <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_PA <- samples_PA[which(rownames(samples_PA) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_PA)
+DNA_or_RNA.ano_PA <- anosim(weighted_unifrac_dist_PA, DNA_or_RNA)
+summary(DNA_or_RNA.ano_PA)
+PA.adonis2 <- adonis2(weighted_unifrac_dist_PA ~  DNA_or_RNA, data=samples_PA)
+PA.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_PA, samples_PA$DNA_or_RNA)
+res
+```
+# 3.22 FL
+
+```{r}
+#only FL
+samples_FL <- samples[which(samples$fraction == "FL"  & samples$sequencing == "1" & (samples$sampling_date == "29/07/2024" | samples$sampling_date == "31/07/2024")),]
+samples_names <- row.names(samples_FL)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_FL <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_FL <- samples_FL[which(rownames(samples_FL) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_FL)
+DNA_or_RNA.ano_FL <- anosim(weighted_unifrac_dist_FL, DNA_or_RNA)
+summary(DNA_or_RNA.ano_FL)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_FL ~  DNA_or_RNA, data=samples_FL)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_FL, samples_FL$DNA_or_RNA)
+res
+```
+# 3.3 Tank and field - mesocosm effect
+# 3.31 PA DNA
+```{r}
+#only PA
+samples_PA <- samples[which(samples$fraction == "PA" & samples$sequencing == "1"  & samples$DNA_or_RNA == "DNA" & samples$type == "Water" & (samples$sampling_date == "29/07/2024" | samples$sampling_date == "31/07/2024")),]
+samples_names <- row.names(samples_PA)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_PA <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_PA <- samples_PA[which(rownames(samples_PA) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_PA)
+tank_or_field.ano_PA <- anosim(weighted_unifrac_dist_PA, tank_or_field)
+summary(tank_or_field.ano_PA)
+PA.adonis2 <- adonis2(weighted_unifrac_dist_PA ~  tank_or_field, data=samples_PA)
+PA.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_PA, samples_PA$tank_or_field)
+res
+```
+# 3.32 PA RNA
+```{r}
+#only PA
+samples_PA <- samples[which(samples$fraction == "PA" & samples$sequencing == "1"  & samples$DNA_or_RNA == "RNA" & samples$type == "Water" & (samples$sampling_date == "29/07/2024" | samples$sampling_date == "31/07/2024")),]
+samples_names <- row.names(samples_PA)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_PA <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_PA <- samples_PA[which(rownames(samples_PA) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_PA)
+tank_or_field.ano_PA <- anosim(weighted_unifrac_dist_PA, tank_or_field)
+summary(tank_or_field.ano_PA)
+PA.adonis2 <- adonis2(weighted_unifrac_dist_PA ~  tank_or_field, data=samples_PA)
+PA.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_PA, samples_PA$tank_or_field)
+res
+```
+# 3.33 FL DNA
+```{r}
+#only FL
+samples_FL <- samples[which(samples$fraction == "FL" & samples$sequencing == "1"  & samples$DNA_or_RNA == "DNA" & samples$type == "Water" & (samples$sampling_date == "29/07/2024" | samples$sampling_date == "31/07/2024")),]
+samples_names <- row.names(samples_FL)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_FL <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_FL <- samples_FL[which(rownames(samples_FL) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_FL)
+tank_or_field.ano_FL <- anosim(weighted_unifrac_dist_FL, tank_or_field)
+summary(tank_or_field.ano_FL)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_FL ~  tank_or_field, data=samples_FL)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_FL, samples_FL$tank_or_field)
+res
+```
+# 3.34 FL RNA
+```{r}
+#only FL
+samples_FL <- samples[which(samples$fraction == "FL" & samples$sequencing == "1"  & samples$DNA_or_RNA == "RNA" & samples$type == "Water" & (samples$sampling_date == "29/07/2024" | samples$sampling_date == "31/07/2024")),]
+samples_names <- row.names(samples_FL)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_FL <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_FL <- samples_FL[which(rownames(samples_FL) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_FL)
+tank_or_field.ano_FL <- anosim(weighted_unifrac_dist_FL, tank_or_field)
+summary(tank_or_field.ano_FL)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_FL ~  tank_or_field, data=samples_FL)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_FL, samples_FL$tank_or_field)
+res
+```
+# 3.22 FL
+
+```{r}
+#only FL
+samples_FL <- samples[which(samples$fraction == "FL"  & samples$sequencing == "1" & (samples$sampling_date == "29/07/2024" | samples$sampling_date == "31/07/2024")),]
+samples_names <- row.names(samples_FL)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_FL <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_FL <- samples_FL[which(rownames(samples_FL) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_FL)
+DNA_or_RNA.ano_FL <- anosim(weighted_unifrac_dist_FL, DNA_or_RNA)
+summary(DNA_or_RNA.ano_FL)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_FL ~  DNA_or_RNA, data=samples_FL)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_FL, samples_FL$DNA_or_RNA)
+res
+```
+## 3.2 Second sampling
+### 3.21 PA DNA
+
+```{r}
+#only PA
+samples_PA_DNA_2 <- samples[which(samples$fraction == "PA" & samples$sampling_date == "21/08/2024" & samples$DNA_or_RNA == "DNA" & samples$sequencing == "2"),]
+samples_names <- row.names(samples_PA_DNA_2)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_PA_DNA_2 <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#97D was removed as outlier
+#keep the same samples in the metadata
+samples_PA_DNA_2 <- samples_PA_DNA_2[which(rownames(samples_PA_DNA_2) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_PA_DNA_2)
+condition.ano_PA <- anosim(weighted_unifrac_dist_PA_DNA_2, conditions)
+summary(condition.ano_PA)
+PA.adonis2 <- adonis2(weighted_unifrac_dist_PA_DNA_2 ~ conditions, data=samples_PA_DNA_2)
+PA.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_PA_DNA_2, samples_PA_DNA_2$conditions)
+res
+```
+### 3.22 FL DNA
+```{r}
+#only FL
+samples_FL_DNA_2 <- samples[which(samples$fraction == "FL" & samples$sampling_date == "21/08/2024" & samples$DNA_or_RNA == "DNA" & samples$sequencing == "2"),]
+samples_names <- row.names(samples_FL_DNA_2)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_FL_DNA_2 <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#97D was removed as outlier
+#keep the same samples in the metadata
+samples_FL_DNA_2 <- samples_FL_DNA_2[which(rownames(samples_FL_DNA_2) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_FL_DNA_2)
+condition.ano_FL <- anosim(weighted_unifrac_dist_FL_DNA_2, conditions)
+summary(condition.ano_FL)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_FL_DNA_2 ~ conditions, data=samples_FL_DNA_2)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_FL_DNA_2, samples_FL_DNA_2$conditions)
+res
+```
+
+
+### 3.23 Sediment DNA
+```{r}
+#only FL
+samples_sed_DNA <- samples[which(samples$type == "Sediment" & samples$sampling_date == "23/08/2024" & samples$DNA_or_RNA == "DNA"),]
+samples_names <- row.names(samples_sed_DNA)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_sed_DNA <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_sed_DNA <- samples_sed_DNA[which(rownames(samples_sed_DNA) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_sed_DNA)
+condition.sed_DNA <- anosim(weighted_unifrac_dist_sed_DNA, conditions)
+summary(condition.sed_DNA)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_sed_DNA ~ conditions, data=samples_sed_DNA)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_sed_DNA, samples_sed_DNA$conditions)
+res
+```
+
+### 3.24 Sediment RNA
+```{r}
+#only FL
+samples_sed_DNA <- samples[which(samples$type == "Sediment" & samples$sampling_date == "23/08/2024" & samples$DNA_or_RNA == "DNA"),]
+samples_names <- row.names(samples_sed_DNA)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_names)
+weighted_unifrac_dist_sed_DNA <- as.dist(weighted_unifrac_distance_matrix[row, col])
+#keep the same samples in the metadata
+samples_sed_DNA <- samples_sed_DNA[which(rownames(samples_sed_DNA) %in% colnames(weighted_unifrac_distance_matrix)[col]),]
+attach(samples_sed_DNA)
+condition.sed_DNA <- anosim(weighted_unifrac_dist_sed_DNA, conditions)
+summary(condition.sed_DNA)
+FL.adonis2 <- adonis2(weighted_unifrac_dist_sed_DNA ~ conditions, data=samples_sed_DNA)
+FL.adonis2
+res <- pairwiseAdonis::pairwise.adonis(weighted_unifrac_dist_sed_DNA, samples_sed_DNA$conditions)
+res
+```
+
+# 4. Taxonomy
+```{r}
+colours <-palette <- c(
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+  "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+  "#393b79", "#637939", "#8c6d31", "#843c39", "#7b4173",
+  "#3182bd", "#31a354", "#756bb1", "#636363", "#e6550d",
+  "#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6"
+)
+taxa_level9 <- read.table("level-9.csv", header=T,
+                        check.names=F, sep=",", row.names = 1) 
+#compare before and after
+taxa_level3 <- read.table("level-3.csv", header=T,
+                        check.names=F, sep=",", row.names = 1) 
+taxa_level3$sampling_site[which(taxa_level3$sampling_site=="1B")] <-"1C"
+taxa_level3$sampling_site[which(taxa_level3$sampling_site=="3J")] <-"3I"
+taxa_level3_long <- taxa_level3 %>%
+  pivot_longer(!colnames(taxa_level3)[17:27], names_to = "taxa", values_to = "count") %>% filter(count>0)
+colnames(taxa_level3_long)[which(colnames(taxa_level3_long)=="`temperature elevation`")] <-"conditions"
+taxa_level3_long_DNA <- taxa_level3_long[which(taxa_level3_long$DNA_or_RNA=="DNA" & taxa_level3_long$type=="Water" & taxa_level3_long$tank_or_field=="tank"), ]
+taxa_level3_long_DNA <-  taxa_level3_long_DNA %>% mutate(alias=paste(conditions, sampling_site), sep ='_')
+taxa_level3_long_DNA$sampling_date <- factor(taxa_level3_long_DNA$sampling_date, levels=c("31/07/2024", "21/08/2024")) 
+
+
+taxa_dna <- ggplot(data=taxa_level3_long_DNA, aes(x=alias, y=count, fill=taxa)) +
+  geom_bar(position="fill", stat="identity") + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values = colours) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_grid(rows = vars(fraction), cols=vars(sampling_date))
+taxa_dna
+# the same for level 4 from the file with all 9 levels
+taxa_level9$sampling_site[which(taxa_level9$sampling_site=="1B")] <-"1C"
+taxa_level9$sampling_site[which(taxa_level9$sampling_site=="3J")] <-"3I"
+colnames(taxa_level9)[which(colnames(taxa_level9)=="`temperature elevation`")] <-"conditions"
+taxa_level9_long <- taxa_level9 %>%
+   pivot_longer(!colnames(taxa_level9)[44:54], names_to = "taxa", values_to = "count") %>% filter(count>0)
+taxa_level9_long_DNA <- taxa_level9_long[which(taxa_level9_long$DNA_or_RNA=="DNA" & taxa_level9_long$type=="Water" & taxa_level9_long$tank_or_field=="tank"), ]
+taxa_level9_long_DNA <-  taxa_level9_long_DNA %>% mutate(alias=paste(conditions, sampling_site), sep ='_')
+colnames(taxa_level3_long)[which(colnames(taxa_level3_long)=="`temperature elevation`")] <-"conditions"
+taxa_level9_long_DNA$sampling_date <- factor(taxa_level9_long_DNA$sampling_date, levels=c("31/07/2024", "21/08/2024")) 
+palette_29 <- c(
+  "#E6194B", "#3CB44B", "#FFE119", "#4363D8", "#F58231",
+  "#911EB4", "#46F0F0", "#F032E6", "#BCF60C", "#FABEBE",
+  "#008080", "#E6BEFF", "#9A6324", "#FFFAC8", "#800000",
+  "#AAFFC3", "#808000", "#FFD8B1", "#000075", "#808080",
+  "#000000", "#A9A9A9", "#1F77B4", "#FF7F0E", "#2CA02C",
+  "#D62728", "#9467BD", "#8C564B", "#17BECF"
+)
+
+
+taxa_dna <- ggplot(data=taxa_level9_long_DNA, aes(x=alias, y=count, fill=taxa)) +
+  geom_bar(position="fill", stat="identity") + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values = palette_29) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_grid(rows = vars(fraction), cols=vars(sampling_date))
+taxa_dna
+```
+#6 Phytoplankton analysis 
+Separate analysis for following groups of phytoplankton: Bacillariophyceae, Chlorophyceae (Green algae), Chrysophyceae (yes), cyanophycea - should not be in our data - 18S, Mediophyceae, Trebouxiophyceae, Zygnematophyceae.
+
+```{r}
+
+#Separate analysis for following groups: Bacillariophyceae (Bacillariophyta) (yes), Chlorophyceae (Green algae) (yes), Chrysophyceae (yes), cyanophycea - should not be in our data - 18S, Mediophyceae (class of bacillariophycea - Polar-centric-Mediophyceae - use for Bacillariophyce all beside this one), Trebouxiophyceae - class of green algae (Chlorophyceae)(yes), Zygnematophyceae - class of green algae (no).
+taxa_level9_long <- taxa_level9 %>%
+  pivot_longer(!colnames(taxa_level9)[44:54], names_to = "taxa", values_to = "count") %>% filter(count>0) %>% separate( col=taxa, sep = ";", into=c("level_1", "level_2", "level_3", "level_4", "level_5", "level_6", "level_7")) #split taxa column into multiple by ";"
+taxa_level9_long <-  taxa_level9_long %>% mutate(level_7_merged= paste( level_1, level_2, level_3, level_4, level_5, level_6, level_7, sep = ';'))
+taxa_phytoplankton <- taxa_level9_long[which(taxa_level9_long$level_4 %in% c("Bacillariophyta", "Trebouxiophyceae", "Chrysophyceae")),]
+#barplot 
+taxa_sed <- taxa_phytoplankton %>% filter(type=="Sediment") %>% ggplot(aes(x=sampling_site, y=count, fill=level_4)) + geom_bar(stat="identity") + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values = colours) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_grid(rows = vars(DNA_or_RNA))
+
+taxa_sed <- taxa_phytoplankton %>% filter(type=="Sediment") %>% ggplot(aes(x=sampling_site, y=count, fill=level_7_merged)) + geom_bar(stat="identity") + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values = colours) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_grid(rows = vars(DNA_or_RNA))
+#still should be relative abundance but zoomed and the rest "other", or relative across smaples?
+
+taxa_sed
+#for water
+taxa_water <- taxa_phytoplankton %>% filter(type=="Water") %>% ggplot(aes(x=sampling_site, y=count, fill=level_7_merged)) + geom_bar(stat="identity") + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values = colours) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_grid(rows = vars(DNA_or_RNA), cols = vars(fraction))
+
+taxa_water
+#for all
+taxa_all <- taxa_phytoplankton %>% ggplot(aes(x=sampling_site, y=count, fill=level_7_merged)) + geom_bar(stat="identity") + guides(fill=guide_legend(ncol=1)) + scale_fill_manual(values = colours) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + facet_grid(rows = vars(`type`), cols = vars(DNA_or_RNA))
+taxa_all
+#unfortunately highlighted groups are not super ubiquitous in our data. This makes analysis dificult to perform. 
+```
+# 7. Alpha diversity analysis
+How diversity differs in different size fractions (organisms sizes) under different temperature conditions over time of the experiment. Compare alpha diversity for DNA and RNA samples separatelely. 
+```{r}
+library(ggpubr)
+richness <- estimate_richness(ps_all, measures=c( "Observed", "Simpson", "Shannon")) 
+symnum<- list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))
+#all alpha diversity meassurments
+
+
+plot_richness(ps_DNA, x="conditions", measures=c( "Observed", "Simpson", "Shannon")) + geom_boxplot() + theme_bw(base_size=20) + theme(axis.text.x = element_text(angle = 90)) #+ 
+plot_richness(ps_DNA, x="conditions", measures=c( "Simpson")) + geom_boxplot() + theme_bw(base_size=20) + theme(axis.text.x = element_text(angle = 90)) + facet_grid(fraction ~ sampling_date) + geom_pwc(method ="dunn_test", hide.ns =F, label = "p.signif", symnum.args=symnum) #+ 
+
+labels_names <- list(
+  ''="sediment",
+  'FL'="water <5 µm",
+  'PA'="water >5 µm")
+###RNA water samples
+#RNA
+samples_RNA <- samples[which(samples$DNA_or_RNA == "RNA" & samples$type == "ater"),]
+samples_RNA_names <- row.names(samples_RNA)
+otu_RNA <- otu[, which(colnames(otu) %in% samples_RNA_names)]
+sum_vec <- as.vector(apply(otu_RNA, 1, sum))
+otu.nonzero <- otu[which(sum_vec!=0),]
+otu.nonzero <- as.matrix(otu.nonzero)
+taxa.nonzero <- taxa[which(sum_vec!=0)]
+taxa.nonzero <- as.matrix(taxa.nonzero)
+col <- which(colnames(weighted_unifrac_distance_matrix) %in% samples_RNA_names)
+row <- which(rownames(weighted_unifrac_distance_matrix) %in% samples_RNA_names)
+
+weighted_unifrac_dist <- as.dist(weighted_unifrac_distance_matrix[row, col]) 
+
+row.names(taxa.nonzero) <- taxa.nonzero[,1]
+
+ps_RNA <- phyloseq(otu_table(otu.nonzero, taxa_are_rows=TRUE), 
+                   sample_data(samples_RNA), 
+                   taxa_names(taxa.nonzero))
+palette <- c( 
+  "#4a7c2e", 
+  "#365ea4", 
+  "#d6a01b", 
+  "#c15208" )
+#try unifrac;
+ord.pcoa.weighted_unifrac_dist <- ordinate(ps_RNA, method="PCoA", distance=weighted_unifrac_dist, na.rm = T)
+
+p<-plot_ordination(ps_RNA, ord.pcoa.weighted_unifrac_dist, color="conditions")
+p<-plot_ordination(ps_RNA, ord.pcoa.weighted_unifrac_dist, color="fraction")
+p<-plot_ordination(ps_RNA, ord.pcoa.weighted_unifrac_dist, color="sequencing")
+#divide by sampling turn 
+p$data$week <- p$data$sampling_date
+p$data$week[which(p$data$week=="21/08/2024")] <- "3rd week"
+p$data$week[which(p$data$week=="23/08/2024")] <- "3rd week"
+p$data$fraction[which(p$data$fraction=="")] <- "sediment"
+p$data$fraction[which(p$data$fraction=="FL")] <- "<5 µm"
+p$data$fraction[which(p$data$fraction=="PA")] <- ">5 µm"
+p$data$week[which(p$data$week!="3rd week")] <- "1st week"
+p$data$all <- paste(p$data$week, p$data$fraction) 
+
+plot_richness(ps_RNA, x="conditions", measures=c("Simpson")) + geom_boxplot() + theme_bw(base_size=20) + theme(axis.text.x = element_text(angle = 90)) + facet_grid(fraction ~ ., labeller = labels_names) + geom_pwc(method ="dunn_test", hide.ns ="p", label = "p.signif", symnum.args=symnum)   #+ 
+
+tiff("Alpha_diversity_Salinity.tiff",units = 'px', width = 1000, height = 500)
+dev.off()
+
+```
